@@ -88,6 +88,9 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  int i, j = 0;
+  for (i = 0; i < 1000000000; i++)
+    j++;
   return -1;
 }
 
@@ -214,18 +217,51 @@ load (const char *file_name, void (**eip) (void), void **esp)
   off_t file_ofs;
   bool success = false;
   int i;
+  
+  int argc = 1;
+  char **argv;
+  char **argv_address;
+  char *save_pointer;
+  char *command;
+  uint32_t word_align, first_esp, last_esp;
+  int length, full_length = 0;
+
+  char stored_file_name[256];
+  char *token;
+  char *last;
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
     goto done;
   process_activate ();
+  
+  /* Count argc */
+  for (i = 0; i < (int)strlen(file_name); i++) {
+    if (file_name[i] == ' ' && file_name[i] != '\0')
+      argc += 1;
+  }
+
+  argv = (char **)malloc(sizeof(char *) *argc);
+
+  /* Parse file name */
+  strlcpy(stored_file_name, file_name, strlen(file_name) + 1);
+  for (i = 0, token = strtok_r(stored_file_name, " ", &save_pointer); i < argc; i++, token = strtok_r(NULL, " ", &save_pointer))
+    argv[i] = token;
+
+  command = strtok_r(file_name, " ", &save_pointer);
+  for (i = 0; i < argc; i++) {
+    argv[i] = command;
+    command = strtok_r(NULL, " ", &save_pointer);
+  }
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open(argv[0]);
+  //file = filesys_open (file_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", argv[0]);
+      //printf ("load: %s: open failed\n", file_name);
       goto done; 
     }
 
@@ -304,6 +340,34 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp))
     goto done;
+ 
+  /* Struct stack */
+  for (i = argc - 1; i >= 0; i--) {
+    length = strlen(argv[i]);
+    *esp -= length + 1;
+    full_length += length + 1;
+    strlcpy (*esp, argv[i], length + 1);
+    argv[i] = *esp;
+  }
+
+  if (full_length % 4 != 0)
+    *esp -= (4 - (full_length % 4));
+  *esp -= 4;
+  **(uint32_t **)esp = 0;
+  
+  for (i = argc - 1; i >= 0; i--) {
+    *esp -= 4;
+    **(uint32_t **)esp = argv[i];
+  }
+
+  *esp -= 4;
+  **(uint32_t **)esp = *esp + 4;
+  *esp -= 4;
+  **(uint32_t **)esp = argc;
+  *esp -= 4;
+  **(uint32_t **)esp = 0;
+  hex_dump(*esp, *esp, 100, 1);
+  free(argv);
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
