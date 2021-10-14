@@ -29,7 +29,9 @@ tid_t
 process_execute (const char *file_name) 
 {
   char *fn_copy;
+  char command[256];
   tid_t tid;
+  int i;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
@@ -38,8 +40,17 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  /* Parse command */
+  for (i = 0; fn_copy[i] != ' '; i++);
+  strlcpy(command, fn_copy, ++i);
+  command[--i] = '\0';
+
+  if (filesys_open(command) == NULL)
+    return -1;
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (command, PRI_DEFAULT, start_process, fn_copy);
+  //tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -88,10 +99,34 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  int i, j = 0;
-  for (i = 0; i < 1000000000; i++)
-    j++;
-  return -1;
+  struct thread *parent = thread_current();
+  struct list_elem *elem;
+  struct thread *child = NULL;
+  struct thread *temp_thread;
+  int exit_status = -1;
+  bool thread_flag = false;
+
+  if(child_tid < 0 || parent == NULL)
+    return -1;
+
+  for (elem = list_begin(&parent->child_list); elem != list_end(&parent->child_list); elem = list_next(elem)) {
+    temp_thread = list_entry(elem, struct thread, child_elem);
+    if (temp_thread->tid == child_tid) {
+      child = temp_thread;
+      thread_flag = true;
+      break;
+    }
+  }
+
+  if (thread_flag == false || child == NULL)
+    return -1;
+
+  sema_down(&(child->child_lock));
+  exit_status = child->exit_status;
+  list_remove(&(child->child_elem));
+  sema_up(&(child->mem_lock));
+
+  return exit_status;
 }
 
 /* Free the current process's resources. */
@@ -117,6 +152,8 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  sema_up(&(cur->child_lock));
+  sema_down(&(cur->mem_lock));
 }
 
 /* Sets up the CPU for running user code in the current
@@ -366,7 +403,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   **(uint32_t **)esp = argc;
   *esp -= 4;
   **(uint32_t **)esp = 0;
-  hex_dump(*esp, *esp, 100, 1);
+  //hex_dump(*esp, *esp, 100, 1);
   free(argv);
 
   /* Start address. */

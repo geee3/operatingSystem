@@ -6,8 +6,10 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "devices/shutdown.h"
+#include "devices/input.h"
 #include "userprog/exception.h"
 #include "userprog/process.h"
+#include "pagedir.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -27,6 +29,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_HALT:
       if (!is_user_vaddr(&syscall_number[1]))
         exit (-1);
+      halt();
       break;
     case SYS_EXIT:
       if (!is_user_vaddr(&syscall_number[1]))
@@ -61,6 +64,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       break;
     case SYS_READ:
       if (!is_user_vaddr(&syscall_number[1]) || !is_user_vaddr(&syscall_number[2]) || !is_user_vaddr(&syscall_number[3]))
+        f->eax = read((int)*(uint32_t *)(f->esp+20), (void *)*(uint32_t *)(f->esp + 24), (unsigned)*((uint32_t *)(f->esp + 28)));
         exit (-1);
       break;
     case SYS_WRITE:
@@ -97,6 +101,8 @@ void halt (void) {
 }
 
 void exit (int status) {
+  struct thread* current = thread_current();
+  current->exit_status = status;
   printf("%s: exit(%d)\n", thread_name(), status);
   thread_exit();
 }
