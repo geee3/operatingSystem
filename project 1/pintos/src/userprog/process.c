@@ -88,6 +88,9 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  int i, j;
+  for (i = 0; i < 1000000000; i++)
+    j += 1;
   return -1;
 }
 
@@ -196,10 +199,70 @@ struct Elf32_Phdr
 #define PF_R 4          /* Readable. */
 
 static bool setup_stack (void **esp);
+void build_stack (const char *file_name, void **esp);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
                           bool writable);
+
+/* Build stack */
+void build_stack (const char *file_name, void **esp) {
+  int argc = 1;
+  char **argv;
+  char *save_pointer;
+  char *command;
+  int length, full_length = 0, i;
+  char stored_file_name[256];
+  char *token;
+
+  /* Count argc */
+  for (i = 0; i < (int)strlen(file_name); i++) {
+    if (file_name[i] == ' ' && file_name[i + 1] != ' ' && file_name[i] != '\0')
+      argc += 1;
+  }
+
+  argv = (char **)malloc(sizeof(char *) * argc);
+
+  /* Parse file name */
+  strlcpy (stored_file_name, file_name, strlen(file_name) + 1);
+  for (i = 0, token = strtok_r(stored_file_name, " ", &save_pointer); i < argc; i++, token = strtok_r(NULL, " ", &save_pointer))
+    argv[i] = token;
+
+  command = strtok_r(file_name, " \t\n", &save_pointer);
+  for (i = 0; i < argc; i++) {
+    argv[i] = command;
+    command = strtok_r(NULL, " \t\n", &save_pointer);
+  }
+
+  /* Struct stack */
+  for (i = argc - 1; i >= 0; i--) {
+    length = strlen(argv[i]);
+    *esp -= length + 1;
+    full_length += length + 1;
+    strlcpy (*esp, argv[i], length + 1);
+    argv[i] = *esp;
+  }
+
+  if (full_length % 4 != 0)
+    *esp -= (4 - (full_length % 4));
+  *esp -= 4;
+  **(uint32_t **)esp = 0;
+
+  for (i = argc - 1; i >= 0; i--) {
+    *esp -= 4;
+    **(uint32_t **)esp = argv[i];
+  }
+
+  *esp -= 4;
+  **(uint32_t **)esp = *esp + 4;
+  *esp -= 4;
+  **(uint32_t **)esp = argc;
+  *esp -= 4;
+  **(uint32_t **)esp = 0;
+  
+  //hex_dump(*esp, *esp, 100, 1);
+  free(argv);
+}
 
 /* Loads an ELF executable from FILE_NAME into the current thread.
    Stores the executable's entry point into *EIP
@@ -215,6 +278,11 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
+  char *parse[2];
+  char process_name[256];
+  strlcpy (process_name, file_name, strlen(file_name) + 1);
+  parse[0] = strtok_r(process_name, " \t\n", &parse[1]);
+
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
   if (t->pagedir == NULL) 
@@ -222,10 +290,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (process_name);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", process_name);
       goto done; 
     }
 
@@ -305,6 +373,9 @@ load (const char *file_name, void (**eip) (void), void **esp)
   if (!setup_stack (esp))
     goto done;
 
+  /* Build stack */
+  build_stack(file_name, esp);
+  
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
