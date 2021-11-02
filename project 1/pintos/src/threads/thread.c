@@ -464,23 +464,9 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
 
-  //old_level = intr_disable ();
+  old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
-  //intr_set_level (old_level);
- 
-  struct thread *parent = running_thread(); 
-  if (t == parent)
-    t->parent = NULL;
-  else {
-    t->parent = parent;
-    list_push_back(&parent->child_list, &t->child_elem);
-  }
-
-  sema_init(&(t->child_lock), 0);
-  sema_init(&(t->mem_lock), 0);
-  list_init(&(t->child_list));
-  list_push_back(&(running_thread()->child_list), &(t->child_elem));
-  t->exit_status = 1;
+  intr_set_level (old_level);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
