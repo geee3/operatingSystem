@@ -1,15 +1,18 @@
 #include "userprog/syscall.h"
+#include "userprog/exception.h"
+#include "userprog/process.h"
 #include <stdio.h>
 #include <syscall-nr.h>
 #include <stdlib.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/init.h"
+#include "threads/malloc.h"
+#include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "lib/user/syscall.h"
 #include "devices/shutdown.h"
 #include "devices/input.h"
-#include "userprog/exception.h"
-#include "userprog/process.h"
-#include "pagedir.h"
 
 static void syscall_handler (struct intr_frame *);
 
@@ -22,78 +25,56 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
-  int *syscall_number = f->esp;
-  memory_protection (syscall_number);
-
-  switch (*syscall_number) {
+  switch (*(uint32_t *)(f->esp)) {
     case SYS_HALT:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
       halt();
       break;
     case SYS_EXIT:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
+      memory_protection(f->esp + 4);
       exit(*(uint32_t *)(f->esp + 4));
       break;
     case SYS_EXEC:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
-      f->eax = exec((const char *)*(uint32_t *)(syscall_number[1]));
+      memory_protection(f->esp + 4);
+      f->eax = exec((const char *)*(uint32_t *)(f->esp + 4));
       break;
     case SYS_WAIT:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
-      f->eax = wait((pid_t)*(uint32_t *)(syscall_number[1]));
+      memory_protection(f->esp + 4);
+      f->eax = wait((pid_t)*(uint32_t *)(f->esp + 4));
       break;
     case SYS_CREATE:
-      if (!is_user_vaddr(&syscall_number[1]) || !is_user_vaddr(&syscall_number[2]))
-        exit (-1);
       break;
     case SYS_REMOVE:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
       break;
     case SYS_OPEN:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
       break;
     case SYS_FILESIZE:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
       break;
     case SYS_READ:
-      if (!is_user_vaddr(&syscall_number[1]) || !is_user_vaddr(&syscall_number[2]) || !is_user_vaddr(&syscall_number[3]))
-        f->eax = read((int)*(uint32_t *)(f->esp+20), (void *)*(uint32_t *)(f->esp + 24), (unsigned)*((uint32_t *)(f->esp + 28)));
-        exit (-1);
+      memory_protection(f->esp + 20);
+      memory_protection(f->esp + 24);
+      memory_protection(f->esp + 28);
+      f->eax = read((int)*(uint32_t *)(f->esp + 20), (void *)*(uint32_t *)(f->esp + 24), (unsigned)*((uint32_t *)(f->esp + 28)));
       break;
     case SYS_WRITE:
-      if (!is_user_vaddr(&syscall_number[1]) || !is_user_vaddr(&syscall_number[2]) || !is_user_vaddr(&syscall_number[3]))
-        exit (-1);
-      f->eax = (uint32_t)write((int)syscall_number[1], (const void *)syscall_number[2], (unsigned)syscall_number[3]);
+      memory_protection(f->esp + 20);
+      memory_protection(f->esp + 24);
+      memory_protection(f->esp + 28);
+      f->eax = write((int)*(uint32_t *)(f->esp + 20), (void *)*(uint32_t *)(f->esp + 24), (unsigned)*((uint32_t *)(f->esp + 28)));
       break;
     case SYS_SEEK:
-      if (!is_user_vaddr(&syscall_number[1]) || !is_user_vaddr(&syscall_number[2]))
-        exit (-1);
       break;
     case SYS_TELL:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
       break;
     case SYS_CLOSE:
-      if (!is_user_vaddr(&syscall_number[1]))
-        exit (-1);
       break;
-  }
+  } 
   //printf ("system call!\n");
   //thread_exit ();
 }
 
-void memory_protection (void* address) {
-  if (!is_user_vaddr(address)) {
-    printf("exit!\n");
-    exit (-1);
-  }
+void memory_protection (const void* address) {
+  if (is_kernel_vaddr(address))
+    exit(-1);
 }
 
 void halt (void) {
@@ -101,9 +82,8 @@ void halt (void) {
 }
 
 void exit (int status) {
-  struct thread* current = thread_current();
-  current->exit_status = status;
   printf("%s: exit(%d)\n", thread_name(), status);
+  thread_current()->exit_status = status;
   thread_exit();
 }
 
@@ -116,12 +96,16 @@ int wait (pid_t pid) {
 }
 
 int read (int fd, void *buffer, unsigned size) {
-  int i;
+  uint32_t i;
+  if (fd == 0) {
     for (i = 0; i < size; i++) {
-    	if (((char *)buffer)[i] == '\0') {
-	  break;
-	}
+      ((char *)buffer)[i] = (char)input_getc();
+      if (((char *)buffer)[i] == '\0')
+	break;
     }
+    return i;
+  }
+  return size;
 }
 
 int write (int fd, const void *buffer, unsigned size) {
