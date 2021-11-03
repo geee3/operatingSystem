@@ -31,6 +31,12 @@ process_execute (const char *file_name)
   char *fn_copy;
   tid_t tid;
 
+  char process_name[256];
+  char *save_pointer[2];
+
+  strlcpy(process_name, file_name, strlen(file_name) + 1);
+  save_pointer[0] = strtok_r(process_name, " \t\n", &save_pointer[1]);
+
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
@@ -38,8 +44,11 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  if(!filesys_open(process_name))
+    return -1;
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (process_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -88,9 +97,21 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  int i, j;
-  for (i = 0; i < 1000000000; i++)
-    j += 1;
+  struct list_elem *elem;
+  struct thread *t = NULL;
+  int exit_status;
+  struct list *child_list = &(thread_current()->child);
+
+  for (elem = list_begin(child_list); elem != list_end(child_list); elem = list_next(elem)) {
+    t = list_entry (elem, struct thread, child_elem);
+    if (child_tid == t->tid) {
+      sema_down(&(t->child_lock));
+      exit_status = t->exit_status;
+      list_remove(&(t->child_elem));
+      sema_up(&(t->wait_parent));
+      return exit_status;
+    }
+  }
   return -1;
 }
 
@@ -117,6 +138,8 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
+  sema_up(&(cur->child_lock));
+  sema_down(&(cur->wait_parent));
 }
 
 /* Sets up the CPU for running user code in the current
