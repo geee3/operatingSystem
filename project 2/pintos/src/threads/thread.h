@@ -98,11 +98,16 @@ struct thread
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
 
-    struct semaphore child_lock;
-    struct semaphore wait_parent;
+    struct thread *parent;
     struct list child;
     struct list_elem child_elem;
+    bool loaded;
     int exit_status;
+
+    struct semaphore exit;
+    struct semaphore load;
+    struct semaphore wait;
+    struct file *fd[128];
 #endif
 
     /* Owned by thread.c. */

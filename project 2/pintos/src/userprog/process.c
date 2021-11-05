@@ -17,6 +17,9 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
+#include "lib/stdio.h"
+#include "lib/string.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
@@ -33,6 +36,8 @@ process_execute (const char *file_name)
 
   char process_name[256];
   char *save_pointer[2];
+  struct thread *t;
+  struct list_elem *elem;
 
   strlcpy(process_name, file_name, strlen(file_name) + 1);
   save_pointer[0] = strtok_r(process_name, " \t\n", &save_pointer[1]);
@@ -49,8 +54,16 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (process_name, PRI_DEFAULT, start_process, fn_copy);
+  sema_down (&thread_current()->load);
+
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
+  
+  for (elem = list_begin(&thread_current()->child); elem != list_end(&thread_current()->child); elem = list_next(elem)) {
+    t = list_entry(elem, struct thread, child_elem);
+    if (t->exit_status == -1)
+      return process_wait(tid);
+  }
   return tid;
 }
 
@@ -72,8 +85,13 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  sema_up(&thread_current()->parent->load);
+  if (!success) {
+    thread_current()->loaded = 0;
+    exit(-1);
+  }
+  else
+    thread_current()->loaded = 1;
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
@@ -98,19 +116,20 @@ int
 process_wait (tid_t child_tid UNUSED) 
 {
   struct list_elem *elem;
-  struct thread *t = NULL;
-  int exit_status;
-  struct list *child_list = &(thread_current()->child);
+  struct thread *t;
+  int exit_status, i = 0;
+  int size = list_size(&(thread_current()->child));
 
-  for (elem = list_begin(child_list); elem != list_end(child_list); elem = list_next(elem)) {
+  for (elem = list_begin(&(thread_current()->child)); i < size; elem = list_next(elem)) {
     t = list_entry (elem, struct thread, child_elem);
     if (child_tid == t->tid) {
-      sema_down(&(t->child_lock));
+      sema_down(&(t->exit));
       exit_status = t->exit_status;
       list_remove(&(t->child_elem));
-      sema_up(&(t->wait_parent));
+      sema_up(&(t->wait));
       return exit_status;
     }
+    i += 1;
   }
   return -1;
 }
@@ -138,8 +157,8 @@ process_exit (void)
       pagedir_activate (NULL);
       pagedir_destroy (pd);
     }
-  sema_up(&(cur->child_lock));
-  sema_down(&(cur->wait_parent));
+  sema_up(&(cur->exit));
+  sema_down(&(cur->wait));
 }
 
 /* Sets up the CPU for running user code in the current
